@@ -1,0 +1,133 @@
+import os
+from flask import Flask, render_template_string, request, jsonify
+from youtube_transcript_api import YouTubeTranscriptApi
+from google import genai
+
+# 1. ضع مفتاح الـ API الخاص بك هنا بين علامتي التنصيص
+API_KEY = "ضع_مفتاح_الـ_API_هنا"
+
+# تهيئة عميل جوجل الذكي والسيرفر
+client = genai.Client(api_key=API_KEY)
+app = Flask(__name__)
+
+# تصميم واجهة المستخدم (HTML + Tailwind CSS) المتجاوبة والداعمة للغة العربية
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>محلل أسرار وأفكار يوتيوب</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="max-w-3xl w-full bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700">
+        <h1 class="text-3xl font-bold text-center mb-2 text-red-500">محلل أسرار وأفكار يوتيوب</h1>
+        <p class="text-gray-400 text-center mb-6">ضع رابط أي فيديو يوتيوب لاستخراج أسراره، الكلمات المفتاحية، وأفكار منافسة لجلب المشاهدات.</p>
+        
+        <div class="flex gap-2 mb-6">
+            <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." 
+                class="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 text-white">
+            <button onclick="analyzeVideo()" id="btnText" 
+                class="bg-red-600 hover:bg-red-700 font-bold px-6 py-3 rounded-xl transition duration-200">تحليل الفيديو</button>
+        </div>
+
+        <div id="loading" class="hidden text-center py-6 text-red-400 animate-pulse">
+            جارٍ سحب التفريغ وتحليل الأسرار بالذكاء الاصطناعي... يرجى الانتظار ⏳
+        </div>
+
+        <div id="resultBox" class="hidden bg-gray-900 border border-gray-700 rounded-xl p-6 whitespace-pre-line text-gray-200 leading-relaxed">
+        </div>
+    </div>
+
+    <script>
+        async function analyzeVideo() {
+            const url = document.getElementById('urlInput').value;
+            const loading = document.getElementById('loading');
+            const resultBox = document.getElementById('resultBox');
+            
+            if (!url) {
+                alert('الرجاء إدخال رابط يوتيوب صالح!');
+                return;
+            }
+
+            loading.classList.remove('hidden');
+            resultBox.classList.add('hidden');
+            resultBox.innerHTML = '';
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+                const data = await response.json();
+                
+                if(data.error) {
+                    resultBox.innerHTML = "❌ خطأ: " + data.error;
+                } else {
+                    resultBox.innerHTML = data.result;
+                }
+                resultBox.classList.remove('hidden');
+            } catch (error) {
+                alert('حدث خطأ أثناء الاتصال بالخادم.');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+def extract_video_id(url):
+    """دالة استخراج معرف فيديو اليوتيوب بدقة من مختلف صيغ الروابط"""
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0]
+    elif "watch?v=" in url:
+        return url.split("watch?v=")[1].split("&")[0]
+    return url
+
+@app.route("/")
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    data = request.json
+    url = data.get("url")
+    video_id = extract_video_id(url)
+    
+    try:
+        # محاولة سحب تفريغ النص (Transcript) من اليوتيوب
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ar', 'en'])
+        transcript_text = " ".join([item['text'] for item in transcript_list])
+    except Exception as e:
+        transcript_text = "تعذر سحب التفريغ النصي تلقائياً (قد تكون الترجمة مغلقة بالفيديو)، يرجى تحليل الفيديو بناءً على عنوانه ونمطه العام."
+
+    # تجهيز البرومبت الاحترافي للذكاء الاصطناعي
+    prompt = f"""
+    أنت خبير يوتيوب استراتيجي ومحلل محتوى فيروسي (Viral).
+    قم بتحليل محتوى فيديو اليوتيوب التالي المستخرج:
+    {transcript_text[:12000]}
+
+    أعطني النتائج منسقة ومرتبة باللغة العربية بالشكل التالي:
+    1. **أسرار نجاح الفيديو (The Core Secrets):** (الخطاف، القصة، وسر جذب المشاهدات).
+    2. **الكلمات المفتاحية والـ Tags:** (مفصولة بفاصلة لسهولة النسخ واستخدامها في الـ SEO).
+    3. **أفكار فيديوهات شبيهة وجديدة (Viral Ideas):** (اقترح 3 أفكار عناوين جذابة مع فكرة المقدمة لكل فكرة لجلب المشاهدات).
+    """
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
+        return jsonify({"result": response.text})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+if __name__ == "__main__":
+    print("🚀 جاري تشغيل سيرفر الموقع بنجاح...")
+    print("🌐 افتح المتصفح على الرابط التالي: http://127.0.0.1:5000")
+    app.run(debug=True, port=5000)
